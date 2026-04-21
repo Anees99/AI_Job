@@ -1,1 +1,44 @@
-(job_assistant/.gitignore is already empty and only source/config files were changed, so no ignores are needed)
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# PDF files (assuming these are generated/build artifacts)
+*.pdf
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Coverage reports
+coverage/
+htmlcov/
+*.coverage
+
+# Build directories
+build/
+dist/
+target/
+
+# Python cache
+.mypy_cache/
+.pytest_cache/
+
+# OS specific
+.DS_Store
+Thumbs.db
+```
