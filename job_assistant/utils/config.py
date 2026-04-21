@@ -28,7 +28,7 @@ class Config:
     WAIT_FOR_CONTENT = 2000  # milliseconds to wait after page load
     
     # AI settings
-    AI_MODEL = "gemini-pro"
+    AI_MODEL = "gemini-1.5-flash"
     TEMPERATURE = 0.1  # Low temperature for consistent scoring
     
     # Valid match scores
