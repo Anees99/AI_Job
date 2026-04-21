@@ -1,6 +1,15 @@
 """
 AI-Driven Dynamic Job Application & Career Assistant
 Main GUI Application using CustomTkinter
+
+Workflow:
+1. User uploads their CV/Resume (PDF/DOCX)
+2. System parses the resume to extract skills/experience
+3. User enters job search criteria (title, location)
+4. System searches multiple job boards for recent postings
+5. AI analyzes each job against the user's profile
+6. Results shown with match scores (A-F)
+7. Generate tailored resumes for selected jobs
 """
 
 import customtkinter as ctk
@@ -9,13 +18,16 @@ import threading
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from utils.logger import setup_logger
 from utils.config import Config
+from core.resume_parser import ResumeParser
+from core.job_search import JobSearchAggregator
 from core.scraper import JobScraper
 from core.ai_engine import AIEngine, JobMatchResult
 from core.database import DatabaseManager
+from core.pdf_generator import PDFGenerator
 
 # Initialize logger
 logger = setup_logger(__name__)
@@ -33,22 +45,28 @@ class JobAssistantApp(ctk.CTk):
 
         # Window configuration
         self.title("AI Job Application Assistant")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
+        self.geometry("1400x900")
+        self.minsize(1200, 800)
 
         # State variables
+        self.resume_parser: Optional[ResumeParser] = None
+        self.job_searcher: Optional[JobSearchAggregator] = None
         self.scraper: Optional[JobScraper] = None
         self.ai_engine: Optional[AIEngine] = None
         self.db_manager: Optional[DatabaseManager] = None
+        self.pdf_generator: Optional[PDFGenerator] = None
+        
         self.user_profile: dict = {}
-        self.current_result: Optional[JobMatchResult] = None
+        self.resume_file_path: str = ""
+        self.search_results: List[Dict[str, Any]] = []
+        self.analysis_results: Dict[str, JobMatchResult] = {}
         self.is_processing = False
 
         # Initialize core components
         self._initialize_components()
 
-        # Load user profile
-        self._load_user_profile()
+        # Load or parse user profile
+        self._load_or_create_profile()
 
         # Build UI
         self._create_ui()
@@ -56,7 +74,7 @@ class JobAssistantApp(ctk.CTk):
         logger.info("Application started successfully")
 
     def _initialize_components(self):
-        """Initialize scraper, AI engine, and database manager."""
+        """Initialize all core components."""
         try:
             self.db_manager = DatabaseManager()
             logger.info("Database manager initialized")
@@ -68,30 +86,100 @@ class JobAssistantApp(ctk.CTk):
             )
 
         try:
+            self.resume_parser = ResumeParser()
+            logger.info("Resume parser initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize resume parser: {e}")
+
+        try:
+            self.job_searcher = JobSearchAggregator(max_results=15)
+            logger.info("Job searcher initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize job searcher: {e}")
+
+        try:
             self.scraper = JobScraper()
             logger.info("Scraper initialized")
         except Exception as e:
             logger.error(f"Failed to initialize scraper: {e}")
-            # Scraper failure is not critical at startup
 
-    def _load_user_profile(self):
-        """Load user profile from file or create default."""
+        try:
+            self.pdf_generator = PDFGenerator()
+            logger.info("PDF generator initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize PDF generator: {e}")
+
+    def _load_or_create_profile(self):
+        """Load user profile from uploaded resume or existing file."""
+        # First try to load from existing JSON profile
         profile_path = Config.USER_PROFILE_PATH
-
+        
         if profile_path.exists():
             try:
                 with open(profile_path, 'r') as f:
                     self.user_profile = json.load(f)
                 logger.info(f"Loaded user profile from {profile_path}")
+                return
             except Exception as e:
-                logger.warning(f"Failed to load profile, using default: {e}")
-                self.user_profile = Config.get_default_profile()
-        else:
-            logger.info("No profile found, using default template")
-            self.user_profile = Config.get_default_profile()
-            # Save default profile
+                logger.warning(f"Failed to load profile: {e}")
+        
+        # If no profile exists, use default template
+        logger.info("No profile found, using default template")
+        self.user_profile = Config.get_default_profile()
+    
+    def _parse_uploaded_resume(self, file_path: str):
+        """Parse an uploaded resume file and update user profile."""
+        if not self.resume_parser:
+            messagebox.showerror("Error", "Resume parser not initialized")
+            return False
+        
+        try:
+            logger.info(f"Parsing resume: {file_path}")
+            self.status_var.set(f"Parsing resume: {Path(file_path).name}...")
+            self.update()
+            
+            # Parse the resume
+            parsed_data = self.resume_parser.parse_file(file_path)
+            
+            # Update user profile with parsed data
+            contact = parsed_data.get('contact', {})
+            self.user_profile['personal_info'] = {
+                'name': contact.get('name', ''),
+                'email': contact.get('email', ''),
+                'phone': contact.get('phone', ''),
+                'location': contact.get('location', ''),
+                'linkedin': contact.get('linkedin', ''),
+                'website': contact.get('website', '')
+            }
+            
+            # Merge skills
+            existing_skills = set(self.user_profile.get('skills', []))
+            new_skills = set(parsed_data.get('skills', []))
+            self.user_profile['skills'] = list(existing_skills | new_skills)
+            
+            # Add experience if not present
+            if 'experience' not in self.user_profile and parsed_data.get('experience'):
+                self.user_profile['experience'] = parsed_data['experience']
+            
+            # Add education if not present
+            if 'education' not in self.user_profile and parsed_data.get('education'):
+                self.user_profile['education'] = parsed_data['education']
+            
+            # Save updated profile
             self._save_user_profile()
-
+            
+            self.resume_file_path = file_path
+            logger.info(f"Successfully parsed resume and updated profile")
+            self.status_var.set(f"✓ Resume loaded: {contact.get('name', 'Unknown')}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to parse resume: {e}")
+            messagebox.showerror("Parse Error", f"Failed to parse resume:\n{str(e)}")
+            self.status_var.set("✗ Failed to parse resume")
+            return False
+    
     def _save_user_profile(self):
         """Save current user profile to file."""
         try:
@@ -198,58 +286,113 @@ class JobAssistantApp(ctk.CTk):
         self._build_resume_tab()
 
     def _build_analyze_tab(self):
-        """Build the job analysis tab."""
+        """Build the job analysis tab with resume upload and job search."""
         self.tab_analyze.grid_columnconfigure(0, weight=1)
-        self.tab_analyze.grid_rowconfigure(2, weight=1)
+        self.tab_analyze.grid_rowconfigure(4, weight=1)
 
-        # URL input section
-        url_frame = ctk.CTkFrame(self.tab_analyze, fg_color="transparent")
-        url_frame.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
-        url_frame.grid_columnconfigure(1, weight=1)
+        # === Resume Upload Section ===
+        resume_frame = ctk.CTkFrame(self.tab_analyze, fg_color="transparent")
+        resume_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        resume_frame.grid_columnconfigure(1, weight=1)
 
-        url_label = ctk.CTkLabel(url_frame, text="Job Posting URL:")
-        url_label.grid(row=0, column=0, padx=(0, 10), sticky="w")
+        resume_label = ctk.CTkLabel(
+            resume_frame, 
+            text="📄 Your Resume:",
+            font=ctk.CTkFont(weight="bold")
+        )
+        resume_label.grid(row=0, column=0, padx=(0, 10), sticky="w")
 
-        self.url_entry = ctk.CTkEntry(url_frame, placeholder_text="https://...")
-        self.url_entry.grid(row=0, column=1, sticky="ew")
+        self.lbl_resume_file = ctk.CTkLabel(
+            resume_frame,
+            text="No resume uploaded",
+            text_color="gray"
+        )
+        self.lbl_resume_file.grid(row=0, column=1, sticky="w")
 
-        self.btn_scrape = ctk.CTkButton(
-            url_frame,
-            text="Extract Description",
-            command=self._start_scraping,
+        self.btn_upload_resume = ctk.CTkButton(
+            resume_frame,
+            text="Upload CV/Resume",
+            command=self._upload_resume,
             width=150
         )
-        self.btn_scrape.grid(row=0, column=2, padx=(10, 0))
+        self.btn_upload_resume.grid(row=0, column=2, padx=(10, 0))
 
-        # Scraped content preview
-        content_label = ctk.CTkLabel(
+        # === Job Search Section ===
+        search_frame = ctk.CTkFrame(self.tab_analyze, fg_color="transparent")
+        search_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        search_frame.grid_columnconfigure((1, 2), weight=1)
+
+        query_label = ctk.CTkLabel(search_frame, text="🔍 Job Title/Skills:")
+        query_label.grid(row=0, column=0, padx=(0, 10), sticky="w", pady=5)
+
+        self.entry_job_query = ctk.CTkEntry(
+            search_frame, 
+            placeholder_text="e.g., Python Developer, Data Scientist",
+            width=300
+        )
+        self.entry_job_query.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+
+        location_label = ctk.CTkLabel(search_frame, text="📍 Location:")
+        location_label.grid(row=0, column=2, padx=(10, 5), sticky="w", pady=5)
+
+        self.entry_location = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="e.g., San Francisco, CA (optional)",
+            width=250
+        )
+        self.entry_location.grid(row=0, column=3, sticky="ew", padx=5, pady=5)
+
+        self.btn_search_jobs = ctk.CTkButton(
+            search_frame,
+            text="Search Jobs",
+            command=self._start_job_search,
+            width=120
+        )
+        self.btn_search_jobs.grid(row=0, column=4, padx=(10, 0), pady=5)
+
+        # Search options
+        options_frame = ctk.CTkFrame(self.tab_analyze, fg_color="transparent")
+        options_frame.grid(row=2, column=0, padx=20, pady=5, sticky="w")
+
+        ctk.CTkLabel(options_frame, text="Sources:").grid(row=0, column=0, padx=(0, 5))
+        
+        self.var_indeed = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(options_frame, text="Indeed", variable=self.var_indeed).grid(row=0, column=1, padx=5)
+        
+        self.var_linkedin = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(options_frame, text="LinkedIn", variable=self.var_linkedin).grid(row=0, column=2, padx=5)
+        
+        ctk.CTkLabel(options_frame, text="| Max Age:").grid(row=0, column=3, padx=(15, 5))
+        
+        self.var_days_old = ctk.StringVar(value="7")
+        days_combo = ctk.CTkOptionMenu(
+            options_frame,
+            values=["3", "7", "14", "30"],
+            variable=self.var_days_old,
+            width=60
+        )
+        days_combo.grid(row=0, column=4, padx=5)
+        ctk.CTkLabel(options_frame, text="days").grid(row=0, column=5, padx=0)
+
+        # Results header
+        results_header = ctk.CTkLabel(
             self.tab_analyze,
-            text="Extracted Job Description:",
+            text="Recent Job Postings:",
+            font=ctk.CTkFont(weight="bold"),
             anchor="w"
         )
-        content_label.grid(row=1, column=0, padx=20, pady=(10, 5), sticky="w")
+        results_header.grid(row=3, column=0, padx=20, pady=(15, 5), sticky="w")
 
-        self.txt_content = ctk.CTkTextbox(
+        # Job results list (scrollable)
+        self.job_results_frame = ctk.CTkScrollableFrame(
             self.tab_analyze,
-            height=200,
-            state="disabled"
+            height=250
         )
-        self.txt_content.grid(row=2, column=0, padx=20, pady=(0, 20), sticky="nsew")
-
-        # Analyze button
-        self.btn_analyze = ctk.CTkButton(
-            self.tab_analyze,
-            text="🚀 Analyze with AI",
-            command=self._start_analysis,
-            height=50,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            state="disabled"
-        )
-        self.btn_analyze.grid(row=3, column=0, padx=20, pady=20)
+        self.job_results_frame.grid(row=4, column=0, padx=20, pady=(0, 15), sticky="nsew")
 
         # Progress indicator
         self.progress_bar = ctk.CTkProgressBar(self.tab_analyze)
-        self.progress_bar.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        self.progress_bar.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
         self.progress_bar.set(0)
 
         self.status_label = ctk.CTkLabel(
@@ -257,7 +400,7 @@ class JobAssistantApp(ctk.CTk):
             text="",
             text_color="gray"
         )
-        self.status_label.grid(row=5, column=0, padx=20, pady=(0, 20))
+        self.status_label.grid(row=6, column=0, padx=20, pady=(0, 20))
 
     def _build_results_tab(self):
         """Build the results display tab."""
@@ -854,16 +997,311 @@ class JobAssistantApp(ctk.CTk):
             logger.error(f"Failed to save to history: {e}")
             messagebox.showerror("Error", f"Could not save to history:\n{str(e)}")
 
-    def _generate_pdf(self):
-        """Generate PDF resume (placeholder - full implementation later)."""
-        if not self.current_result:
+    def _upload_resume(self):
+        """Open file dialog to upload resume/CV."""
+        if not self.resume_parser:
+            messagebox.showerror("Error", "Resume parser not initialized")
             return
-
-        messagebox.showinfo(
-            "PDF Generation",
-            "PDF generation feature coming soon!\n\n"
-            "For now, you can copy the tailored bullets and add them to your resume manually."
+        
+        filetypes = [
+            ("PDF files", "*.pdf"),
+            ("Word documents", "*.docx *.doc"),
+            ("All files", "*.*")
+        ]
+        
+        file_path = filedialog.askopenfilename(
+            title="Select Your Resume/CV",
+            filetypes=filetypes
         )
+        
+        if file_path:
+            success = self._parse_uploaded_resume(file_path)
+            if success:
+                self.lbl_resume_file.configure(
+                    text=f"✓ {Path(file_path).name}",
+                    text_color="#2ecc71"
+                )
+                self.status_var.set(f"Resume loaded - Ready to search jobs!")
+    
+    def _start_job_search(self):
+        """Start searching for jobs in background thread."""
+        if not self.resume_file_path and not self.user_profile.get('skills'):
+            messagebox.showwarning(
+                "No Resume",
+                "Please upload your resume first so we can find matching jobs!"
+            )
+            return
+        
+        query = self.entry_job_query.get().strip()
+        if not query:
+            messagebox.showwarning(
+                "Missing Query",
+                "Please enter a job title or skills to search for."
+            )
+            return
+        
+        if self.is_processing:
+            return
+        
+        # Get search parameters
+        location = self.entry_location.get().strip()
+        days_old = int(self.var_days_old.get())
+        
+        sources = []
+        if self.var_indeed.get():
+            sources.append('indeed')
+        if self.var_linkedin.get():
+            sources.append('linkedin')
+        
+        if not sources:
+            sources = ['indeed']  # Default to Indeed
+        
+        # Start background search
+        self.is_processing = True
+        self.progress_bar.set(0)
+        self.btn_search_jobs.configure(state="disabled")
+        self.status_var.set(f"Searching for '{query}' jobs...")
+        
+        # Clear previous results
+        for widget in self.job_results_frame.winfo_children():
+            widget.destroy()
+        
+        search_thread = threading.Thread(
+            target=self._search_jobs_thread,
+            args=(query, location, sources, days_old),
+            daemon=True
+        )
+        search_thread.start()
+    
+    def _search_jobs_thread(self, query: str, location: str, sources: List[str], days_old: int):
+        """Background thread for job searching."""
+        try:
+            if not self.job_searcher:
+                raise RuntimeError("Job searcher not initialized")
+            
+            # Perform search
+            jobs = self.job_searcher.search_jobs(
+                query=query,
+                location=location,
+                sources=sources,
+                days_old=days_old
+            )
+            
+            self.search_results = jobs
+            
+            # Update UI on main thread
+            self.after(0, lambda: self._on_search_complete(jobs))
+            
+        except Exception as e:
+            logger.error(f"Job search failed: {e}")
+            self.after(0, lambda: self._on_search_error(str(e)))
+    
+    def _on_search_complete(self, jobs: List[Dict[str, Any]]):
+        """Handle successful job search completion."""
+        self.is_processing = False
+        self.btn_search_jobs.configure(state="normal")
+        self.progress_bar.set(1)
+        
+        if not jobs:
+            self.status_var.set("⚠ No jobs found. Try different keywords or expand search.")
+            messagebox.showinfo(
+                "No Results",
+                "No jobs found matching your criteria.\n\n"
+                "Try:\n"
+                "- Using broader keywords\n"
+                "- Expanding the date range\n"
+                "- Removing location filter"
+            )
+            return
+        
+        # Display job results
+        self._display_job_results(jobs)
+        
+        self.status_var.set(f"✓ Found {len(jobs)} jobs! Click 'Analyze Match' on any job.")
+        logger.info(f"Search complete: {len(jobs)} jobs found")
+    
+    def _on_search_error(self, error_msg: str):
+        """Handle job search error."""
+        self.is_processing = False
+        self.btn_search_jobs.configure(state="normal")
+        self.progress_bar.set(0)
+        self.status_var.set("✗ Search failed")
+        
+        messagebox.showerror(
+            "Search Error",
+            f"Failed to search for jobs:\n{error_msg}"
+        )
+    
+    def _display_job_results(self, jobs: List[Dict[str, Any]]):
+        """Display job search results in scrollable frame."""
+        # Clear existing
+        for widget in self.job_results_frame.winfo_children():
+            widget.destroy()
+        
+        for idx, job in enumerate(jobs):
+            # Create job card frame
+            card = ctk.CTkFrame(self.job_results_frame, corner_radius=8)
+            card.pack(fill="x", padx=5, pady=5)
+            
+            # Title and company
+            title_frame = ctk.CTkFrame(card, fg_color="transparent")
+            title_frame.pack(fill="x", padx=15, pady=(15, 5))
+            
+            title_label = ctk.CTkLabel(
+                title_frame,
+                text=job.get('title', 'Unknown Position'),
+                font=ctk.CTkFont(size=14, weight="bold"),
+                anchor="w"
+            )
+            title_label.pack(side="left")
+            
+            # Source badge
+            source = job.get('source', 'unknown')
+            source_colors = {
+                'indeed': '#2166ac',
+                'linkedin': '#0a66c2',
+                'glassdoor': '#0caa4b',
+                'google': '#4285f4'
+            }
+            source_color = source_colors.get(source, '#666')
+            
+            source_badge = ctk.CTkLabel(
+                title_frame,
+                text=source.upper(),
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=source_color,
+                bg_color=source_color + "20"  # Add transparency
+            )
+            source_badge.pack(side="right")
+            
+            # Company and location
+            info_label = ctk.CTkLabel(
+                card,
+                text=f"{job.get('company', 'Unknown Company')} • {job.get('location', 'Remote/Unspecified')}",
+                text_color="gray",
+                anchor="w"
+            )
+            info_label.pack(padx=15, pady=(0, 5))
+            
+            # Posted date
+            posted = job.get('posted_days_ago', 999)
+            if posted < 999:
+                if posted == 0:
+                    date_text = "Posted today"
+                elif posted == 1:
+                    date_text = "Posted yesterday"
+                else:
+                    date_text = f"Posted {posted} days ago"
+                
+                date_label = ctk.CTkLabel(
+                    card,
+                    text=date_text,
+                    text_color="gray",
+                    font=ctk.CTkFont(size=11),
+                    anchor="w"
+                )
+                date_label.pack(padx=15, pady=(0, 10))
+            
+            # Analyze button
+            analyze_btn = ctk.CTkButton(
+                card,
+                text="🎯 Analyze Match",
+                command=lambda j=job: self._analyze_single_job(j),
+                width=120,
+                height=32
+            )
+            analyze_btn.pack(padx=15, pady=(0, 15))
+            
+            # Separator line (except last)
+            if idx < len(jobs) - 1:
+                separator = ctk.CTkFrame(card, height=1, fg_color="#444")
+                separator.pack(fill="x", padx=15, pady=(0, 5))
+
+    def _analyze_single_job(self, job: Dict[str, Any]):
+        """Analyze a single job posting against user profile."""
+        if not self.scraper or not self.ai_engine:
+            messagebox.showerror("Error", "Required components not initialized")
+            return
+        
+        url = job.get('url', '')
+        if not url:
+            messagebox.showerror("Error", "Job has no URL")
+            return
+        
+        if self.is_processing:
+            return
+        
+        self.is_processing = True
+        self.progress_bar.set(0)
+        self.status_var.set(f"Scraping job description from {job.get('company', 'company')}...")
+        
+        # Disable all analyze buttons temporarily
+        for widget in self.job_results_frame.winfo_children():
+            for child in widget.winfo_children():
+                if isinstance(child, ctk.CTkButton):
+                    child.configure(state="disabled")
+        
+        # Start scraping in background
+        scrape_thread = threading.Thread(
+            target=self._scrape_and_analyze_job,
+            args=(job,),
+            daemon=True
+        )
+        scrape_thread.start()
+    
+    def _scrape_and_analyze_job(self, job: Dict[str, Any]):
+        """Background thread to scrape job and analyze with AI."""
+        try:
+            # Step 1: Scrape job description
+            self.after(0, lambda: self.progress_bar.set(0.3))
+            job_description = self.scraper.scrape(job.get('url', ''))
+            
+            if not job_description or len(job_description) < 100:
+                raise RuntimeError("Could not extract sufficient job description")
+            
+            # Step 2: Analyze with AI
+            self.after(0, lambda: self.status_var.set("Analyzing match with AI..."))
+            self.after(0, lambda: self.progress_bar.set(0.5))
+            
+            if not self.ai_engine:
+                raise RuntimeError("AI engine not initialized")
+            
+            result = self.ai_engine.analyze_job(
+                job_description=job_description,
+                user_profile=self.user_profile
+            )
+            
+            # Store result with job info
+            result.job_info = job
+            
+            self.analysis_results[job.get('url')] = result
+            
+            # Update UI
+            self.after(0, lambda: self._on_job_analysis_complete(result, job))
+            
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}")
+            self.after(0, lambda: self._on_analysis_error(str(e)))
+    
+    def _on_job_analysis_complete(self, result: JobMatchResult, job: Dict[str, Any]):
+        """Handle successful job analysis."""
+        self.is_processing = False
+        self.progress_bar.set(1)
+        
+        # Re-enable buttons
+        for widget in self.job_results_frame.winfo_children():
+            for child in widget.winfo_children():
+                if isinstance(child, ctk.CTkButton):
+                    child.configure(state="normal")
+        
+        # Switch to results tab
+        self.tabview.set("📋 Results")
+        
+        # Display results
+        self._display_results(result)
+        
+        self.status_var.set(f"✓ Analysis complete: Match Score {result.match_grade}")
+        logger.info(f"Analysis complete for {job.get('title')} - Grade: {result.match_grade}")
 
     def _copy_bullets(self):
         """Copy tailored bullets to clipboard."""
