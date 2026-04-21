@@ -1,0 +1,73 @@
+{
+  "personal_info": {
+    "name": "Your Name",
+    "email": "your.email@example.com",
+    "phone": "+1-234-567-8900",
+    "location": "City, State",
+    "linkedin": "linkedin.com/in/yourprofile",
+    "github": "github.com/yourusername"
+  },
+  "summary": "Motivated software developer with experience in building scalable web applications and a passion for clean code. Proven ability to work in agile teams and deliver high-quality solutions.",
+  "skills": [
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "React",
+    "Node.js",
+    "SQL",
+    "PostgreSQL",
+    "Git",
+    "Docker",
+    "AWS",
+    "REST APIs",
+    "GraphQL"
+  ],
+  "experience": [
+    {
+      "title": "Software Developer",
+      "company": "Tech Company Inc.",
+      "duration": "Jan 2022 - Present",
+      "bullets": [
+        "Developed and maintained multiple web applications serving 10,000+ daily users",
+        "Reduced API response time by 40% through optimization and caching strategies",
+        "Collaborated with cross-functional teams to deliver features on schedule",
+        "Implemented automated testing, increasing code coverage from 60% to 85%"
+      ]
+    },
+    {
+      "title": "Junior Developer",
+      "company": "StartupXYZ",
+      "duration": "Jun 2020 - Dec 2021",
+      "bullets": [
+        "Built responsive front-end interfaces using React and TypeScript",
+        "Integrated third-party APIs for payment processing and analytics",
+        "Participated in code reviews and mentored interns",
+        "Contributed to architecture decisions for microservices migration"
+      ]
+    }
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Science in Computer Science",
+      "institution": "University Name",
+      "graduation": "May 2020",
+      "gpa": "3.8/4.0"
+    }
+  ],
+  "projects": [
+    {
+      "name": "Job Application Tracker",
+      "description": "A full-stack application for tracking job applications and interview progress",
+      "technologies": ["Python", "FastAPI", "React", "PostgreSQL"]
+    },
+    {
+      "name": "E-commerce Platform",
+      "description": "Online store with inventory management and payment integration",
+      "technologies": ["Node.js", "Express", "MongoDB", "Stripe API"]
+    }
+  ],
+  "certifications": [
+    "AWS Certified Developer Associate",
+    "Google Cloud Professional Developer"
+  ]
+}
